@@ -61,7 +61,7 @@ async function getPolymarketEvent(state) {
     "-senate-election-winner";
 
   const url =
-    "https://gamma-api.polymarket.com/events?slug=" +
+    "https://gamma-api.polymarket.com/events/slug/" +
     encodeURIComponent(slug);
 
   const response = await fetch(url, {
