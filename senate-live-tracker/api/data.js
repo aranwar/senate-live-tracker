@@ -126,22 +126,20 @@ async function getPolymarketEvent(state) {
 
     if (!Number.isFinite(rawPrice)) continue;
 
-    let name = candidateFromQuestion(question);
+   const title = String(market.groupItemTitle || "").trim();
 
-    const marketSlug = String(market.slug || "");
+let name = title || candidateFromQuestion(question);
 
-    if (/democrats?/i.test(question + " " + marketSlug)) {
-      name = "Democratic nominee";
-    }
+let party = "";
 
-    if (/republicans?/i.test(question + " " + marketSlug)) {
-      name = "Republican nominee";
-    }
+const partyMatch = name.match(/\(([DRI])\)\s*$/i);
 
-    const party = partyFromText(
-      question + " " + marketSlug + " " + name
-    );
-
+if (partyMatch) {
+  party = partyMatch[1].toUpperCase();
+  name = name.replace(/\s*\([DRI]\)\s*$/i, "").trim();
+} else {
+  party = partyFromText(question + " " + market.slug + " " + name);
+}
     candidates.push({
       name,
       party,
