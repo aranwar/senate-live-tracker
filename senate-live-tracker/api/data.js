@@ -15,12 +15,13 @@ const STATES = [
   "Georgia"
 ];
 
-function parseMaybeJson(value) {
+function parseArray(value) {
   if (Array.isArray(value)) return value;
 
   if (typeof value === "string") {
     try {
-      return JSON.parse(value);
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -29,42 +30,38 @@ function parseMaybeJson(value) {
   return [];
 }
 
-function partyFromText(text) {
-  const s = String(text || "");
-
-  if (/\(D\)/i.test(s) || /\bDemocrat/i.test(s)) return "D";
-  if (/\(R\)/i.test(s) || /\bRepublican/i.test(s)) return "R";
-  if (/\(I\)/i.test(s) || /\bIndependent/i.test(s)) return "I";
-
-  return "";
+function stateSlug(state) {
+  return state
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
 }
 
-function candidateFromQuestion(question) {
-  let q = String(question || "").trim();
+function splitCandidateTitle(title) {
+  const text = String(title || "").trim();
 
-  q = q
-    .replace(/^Will\s+/i, "")
-    .replace(/\s+win\s+the\s+.+$/i, "")
-    .replace(/\s+win\s+.+$/i, "")
-    .replace(/\?$/, "")
-    .trim();
+  const match = text.match(/^(.*?)\s*\(([DRI])\)\s*$/i);
 
-  return q;
+  if (match) {
+    return {
+      name: match[1].trim(),
+      party: match[2].toUpperCase()
+    };
+  }
+
+  return {
+    name: text,
+    party: ""
+  };
 }
 
-async function getPolymarketEvent(state) {
-  const slug =
-    state
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "") +
-    "-senate-election-winner";
+async function getStateMarket(state) {
+  const slug = `${stateSlug(state)}-senate-election-winner`;
 
-  const url =
-    "https://gamma-api.polymarket.com/events/slug/" +
-    encodeURIComponent(slug);
+  const apiUrl =
+    `https://gamma-api.polymarket.com/events/slug/${slug}`;
 
-  const response = await fetch(url, {
+  const response = await fetch(apiUrl, {
     headers: {
       Accept: "application/json",
       "User-Agent": "Mozilla/5.0"
@@ -72,27 +69,10 @@ async function getPolymarketEvent(state) {
   });
 
   if (!response.ok) {
-    throw new Error(
-      `Polymarket ${state} returned HTTP ${response.status}`
-    );
+    throw new Error(`HTTP ${response.status}`);
   }
 
-  const data = await response.json();
-
-  const event = Array.isArray(data)
-    ? data[0]
-    : Array.isArray(data.events)
-      ? data.events[0]
-      : data;
-
-  if (!event) {
-    return {
-      state,
-      candidates: [],
-      matchedMarkets: 0,
-      source: `https://polymarket.com/event/${slug}`
-    };
-  }
+  const event = await response.json();
 
   const markets = Array.isArray(event.markets)
     ? event.markets
@@ -101,67 +81,55 @@ async function getPolymarketEvent(state) {
   const candidates = [];
 
   for (const market of markets) {
+    if (market.active !== true) continue;
     if (market.closed === true) continue;
 
-    const question = String(
-      market.question ||
-      market.title ||
-      ""
+    const title = String(market.groupItemTitle || "").trim();
+
+    // Ignore unused placeholder markets.
+    if (!title) continue;
+    if (/^Person\s+[A-Z]$/i.test(title)) continue;
+
+    const outcomes = parseArray(market.outcomes);
+    const prices = parseArray(market.outcomePrices);
+
+    const yesIndex = outcomes.findIndex(
+      outcome => String(outcome).toLowerCase() === "yes"
     );
 
-    const outcomes = parseMaybeJson(market.outcomes);
-    const prices = parseMaybeJson(market.outcomePrices);
+    if (yesIndex < 0) continue;
+    if (prices[yesIndex] == null) continue;
 
-    let yesIndex = outcomes.findIndex(
-      x => String(x).toLowerCase() === "yes"
-    );
+    const price = Number(prices[yesIndex]);
 
-    if (yesIndex === -1 && outcomes.length === 2) {
-      yesIndex = 0;
-    }
+    if (!Number.isFinite(price)) continue;
 
-    if (yesIndex === -1) continue;
+    const parsed = splitCandidateTitle(title);
 
-    const rawPrice = Number(prices[yesIndex]);
-
-    if (!Number.isFinite(rawPrice)) continue;
-
-   const title = String(market.groupItemTitle || "").trim();
-
-let name = title || candidateFromQuestion(question);
-
-let party = "";
-
-const partyMatch = name.match(/\(([DRI])\)\s*$/i);
-
-if (partyMatch) {
-  party = partyMatch[1].toUpperCase();
-  name = name.replace(/\s*\([DRI]\)\s*$/i, "").trim();
-} else {
-  party = partyFromText(question + " " + market.slug + " " + name);
-}
     candidates.push({
-      name,
-      party,
-      price: rawPrice,
-      percent: Math.round(rawPrice * 1000) / 10,
-      question
+      name: parsed.name,
+      party: parsed.party,
+      price: price,
+      question: market.question || "",
+      updatedAt: market.updatedAt || null
     });
   }
+
+  candidates.sort((a, b) => b.price - a.price);
 
   return {
     state,
     candidates,
-    matchedMarkets: markets.length,
+    matchedMarkets: candidates.length,
     source: `https://polymarket.com/event/${slug}`
   };
 }
 
 async function getPolymarket() {
-  const results = await Promise.all(
+  return Promise.all(
     STATES.map(async state => {
       try {
-        return await getPolymarketEvent(state);
+        return await getStateMarket(state);
       } catch (error) {
         return {
           state,
@@ -172,22 +140,12 @@ async function getPolymarket() {
       }
     })
   );
-
-  return results;
-}
-
-async function getPolls() {
-  /*
-    RealClearPolling currently blocks the Vercel server with HTTP 403.
-    Keep the API shape intact while we replace the polling source.
-  */
-  return [];
 }
 
 module.exports = async function handler(req, res) {
   res.setHeader(
     "Cache-Control",
-    "s-maxage=30, stale-while-revalidate=60"
+    "s-maxage=30, stale-while-revalidate=30"
   );
 
   try {
@@ -195,10 +153,14 @@ module.exports = async function handler(req, res) {
 
     res.status(200).json({
       updated: new Date().toISOString(),
-      polls: await getPolls(),
+
+      // Polling source will be added separately.
+      polls: [],
+
       markets,
+
       errors: {
-        polls: "RCP blocks server requests with HTTP 403",
+        polls: "Polling source temporarily unavailable",
         markets: null
       }
     });
@@ -208,7 +170,7 @@ module.exports = async function handler(req, res) {
       polls: [],
       markets: [],
       errors: {
-        polls: null,
+        polls: "Polling source temporarily unavailable",
         markets: error.message
       }
     });
