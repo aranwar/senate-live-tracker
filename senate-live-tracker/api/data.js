@@ -1,202 +1,218 @@
 const STATES = [
-  "Maine", "Ohio", "Texas", "Nebraska", "Alaska", "Iowa", "Kansas",
-  "Michigan", "Florida", "South Carolina", "New Hampshire",
-  "Minnesota", "North Carolina", "Georgia"
+  "Maine",
+  "Ohio",
+  "Texas",
+  "Nebraska",
+  "Alaska",
+  "Iowa",
+  "Kansas",
+  "Michigan",
+  "Florida",
+  "South Carolina",
+  "New Hampshire",
+  "Minnesota",
+  "North Carolina",
+  "Georgia"
 ];
 
-const RACES = {
-  Maine: ["Collins", "Jackson"],
-  Ohio: ["Husted", "Brown"],
-  Texas: ["Paxton", "Talarico"],
-  Nebraska: ["Ricketts", "Osborn"],
-  Alaska: ["Sullivan", "Peltola"],
-  Iowa: ["Hinson", "Turek"],
-  Kansas: ["Marshall", "Hamilton"],
-  Michigan: ["Rogers", "El-Sayed"],
-  Florida: ["Moody", "Nixon"],
-  "South Carolina": ["Graham Nordone", "Andrews"],
-  "New Hampshire": ["Sununu", "Pappas"],
-  Minnesota: ["Tafoya", "Flanagan"],
-  "North Carolina": ["Whatley", "Cooper"],
-  Georgia: ["Collins", "Ossoff"]
-};
+function parseMaybeJson(value) {
+  if (Array.isArray(value)) return value;
 
-function stripHtml(html) {
-  return html
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/\s+/g, " ")
-    .trim();
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
 }
 
-async function getPolls() {
-  const url = "https://www.realclearpolling.com/latest-polls/senate";
+function partyFromText(text) {
+  const s = String(text || "");
+
+  if (/\(D\)/i.test(s) || /\bDemocrat/i.test(s)) return "D";
+  if (/\(R\)/i.test(s) || /\bRepublican/i.test(s)) return "R";
+  if (/\(I\)/i.test(s) || /\bIndependent/i.test(s)) return "I";
+
+  return "";
+}
+
+function candidateFromQuestion(question) {
+  let q = String(question || "").trim();
+
+  q = q
+    .replace(/^Will\s+/i, "")
+    .replace(/\s+win\s+the\s+.+$/i, "")
+    .replace(/\s+win\s+.+$/i, "")
+    .replace(/\?$/, "")
+    .trim();
+
+  return q;
+}
+
+async function getPolymarketEvent(state) {
+  const slug =
+    state
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") +
+    "-senate-election-winner";
+
+  const url =
+    "https://gamma-api.polymarket.com/events?slug=" +
+    encodeURIComponent(slug);
 
   const response = await fetch(url, {
     headers: {
+      Accept: "application/json",
       "User-Agent": "Mozilla/5.0"
     }
   });
 
   if (!response.ok) {
-    throw new Error(`RCP returned HTTP ${response.status}`);
-  }
-
-  const html = await response.text();
-  const text = stripHtml(html);
-  const results = [];
-
-  for (const state of STATES) {
-    const candidates = RACES[state];
-    const raceMarker = `2026 ${state} Senate`;
-
-    let start = text.indexOf(raceMarker);
-
-    if (start === -1 && state === "Ohio") {
-      start = text.indexOf("2026 Ohio Senate Special Election");
-    }
-
-    if (start === -1 && state === "Florida") {
-      start = text.indexOf("2026 Florida Senate Special Election");
-    }
-
-    if (start === -1) continue;
-
-    const section = text.slice(start, start + 500);
-
-    const pollMatch = section.match(/Poll\s*([^]*?)Results/i);
-    const spreadMatch = section.match(/Spread\s*([A-Za-z .'-]+(?:\s*\+\d+(?:\.\d+)?)?|Tie)/i);
-
-    const candidateResults = [];
-
-    for (const candidate of candidates) {
-      const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const regex = new RegExp(`${escaped}\\s+(\\d+(?:\\.\\d+)?)`, "i");
-      const match = section.match(regex);
-
-      candidateResults.push({
-        name: candidate,
-        value: match ? Number(match[1]) : null
-      });
-    }
-
-    results.push({
-      state,
-      pollster: pollMatch ? pollMatch[1].trim() : null,
-      candidates: candidateResults,
-      spread: spreadMatch ? spreadMatch[1].trim() : null,
-      source: url
-    });
-  }
-
-  return results;
-}
-
-function parseMaybeJson(value) {
-  if (typeof value !== "string") return value;
-
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
-}
-
-async function getPolymarket() {
-  const url =
-    "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=1000";
-
-  const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(`Polymarket returned HTTP ${response.status}`);
+    throw new Error(
+      `Polymarket ${state} returned HTTP ${response.status}`
+    );
   }
 
   const data = await response.json();
-  const markets = Array.isArray(data) ? data : data.markets || [];
-  const results = [];
 
-  for (const state of STATES) {
-    const matches = markets.filter((market) => {
-      const question = String(
-        market.question || market.title || market.slug || ""
-      ).toLowerCase();
+  const event = Array.isArray(data)
+    ? data[0]
+    : Array.isArray(data.events)
+      ? data.events[0]
+      : data;
 
-      return (
-        question.includes(state.toLowerCase()) &&
-        question.includes("senate")
-      );
-    });
+  if (!event) {
+    return {
+      state,
+      candidates: [],
+      matchedMarkets: 0,
+      source: `https://polymarket.com/event/${slug}`
+    };
+  }
 
-    const candidates = [];
+  const markets = Array.isArray(event.markets)
+    ? event.markets
+    : [];
 
-    for (const market of matches) {
-      const outcomes = parseMaybeJson(market.outcomes) || [];
-      const prices = parseMaybeJson(market.outcomePrices) || [];
+  const candidates = [];
 
-      if (Array.isArray(outcomes) && Array.isArray(prices)) {
-        for (let i = 0; i < outcomes.length; i++) {
-          candidates.push({
-            market: market.question || market.title || "",
-            outcome: outcomes[i],
-            price:
-              prices[i] !== undefined && prices[i] !== null
-                ? Number(prices[i])
-                : null
-          });
-        }
-      }
+  for (const market of markets) {
+    if (market.closed === true) continue;
+
+    const question = String(
+      market.question ||
+      market.title ||
+      ""
+    );
+
+    const outcomes = parseMaybeJson(market.outcomes);
+    const prices = parseMaybeJson(market.outcomePrices);
+
+    let yesIndex = outcomes.findIndex(
+      x => String(x).toLowerCase() === "yes"
+    );
+
+    if (yesIndex === -1 && outcomes.length === 2) {
+      yesIndex = 0;
     }
 
-    results.push({
-      state,
-      candidates,
-      matchedMarkets: matches.length,
-      source: "https://polymarket.com"
+    if (yesIndex === -1) continue;
+
+    const rawPrice = Number(prices[yesIndex]);
+
+    if (!Number.isFinite(rawPrice)) continue;
+
+    let name = candidateFromQuestion(question);
+
+    const marketSlug = String(market.slug || "");
+
+    if (/democrats?/i.test(question + " " + marketSlug)) {
+      name = "Democratic nominee";
+    }
+
+    if (/republicans?/i.test(question + " " + marketSlug)) {
+      name = "Republican nominee";
+    }
+
+    const party = partyFromText(
+      question + " " + marketSlug + " " + name
+    );
+
+    candidates.push({
+      name,
+      party,
+      price: rawPrice,
+      percent: Math.round(rawPrice * 1000) / 10,
+      question
     });
   }
+
+  return {
+    state,
+    candidates,
+    matchedMarkets: markets.length,
+    source: `https://polymarket.com/event/${slug}`
+  };
+}
+
+async function getPolymarket() {
+  const results = await Promise.all(
+    STATES.map(async state => {
+      try {
+        return await getPolymarketEvent(state);
+      } catch (error) {
+        return {
+          state,
+          candidates: [],
+          matchedMarkets: 0,
+          error: error.message
+        };
+      }
+    })
+  );
 
   return results;
 }
 
+async function getPolls() {
+  /*
+    RealClearPolling currently blocks the Vercel server with HTTP 403.
+    Keep the API shape intact while we replace the polling source.
+  */
+  return [];
+}
+
 module.exports = async function handler(req, res) {
+  res.setHeader(
+    "Cache-Control",
+    "s-maxage=30, stale-while-revalidate=60"
+  );
+
   try {
-    const [pollResult, marketResult] = await Promise.allSettled([
-      getPolls(),
-      getPolymarket()
-    ]);
+    const markets = await getPolymarket();
 
     res.status(200).json({
       updated: new Date().toISOString(),
-
-      polls:
-        pollResult.status === "fulfilled"
-          ? pollResult.value
-          : [],
-
-      markets:
-        marketResult.status === "fulfilled"
-          ? marketResult.value
-          : [],
-
+      polls: await getPolls(),
+      markets,
       errors: {
-        polls:
-          pollResult.status === "rejected"
-            ? pollResult.reason.message
-            : null,
-
-        markets:
-          marketResult.status === "rejected"
-            ? marketResult.reason.message
-            : null
+        polls: "RCP blocks server requests with HTTP 403",
+        markets: null
       }
     });
   } catch (error) {
     res.status(500).json({
-      error: error.message
+      updated: new Date().toISOString(),
+      polls: [],
+      markets: [],
+      errors: {
+        polls: null,
+        markets: error.message
+      }
     });
   }
 };
