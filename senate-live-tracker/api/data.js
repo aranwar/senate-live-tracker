@@ -2,7 +2,16 @@ const STATES=['Maine','Ohio','Texas','Nebraska','Alaska','Iowa','Kansas','Michig
 const RACES={
 'Maine':['Collins','Jackson'],'Ohio':['Husted','Brown'],'Texas':['Paxton','Talarico'],'Nebraska':['Ricketts','Osborn'],'Alaska':['Sullivan','Peltola'],'Iowa':['Hinson','Turek'],'Kansas':['Marshall','Hamilton'],'Michigan':['Rogers','El-Sayed'],'Florida':['Moody','Nixon'],'South Carolina':['Graham Nordone','Andrews'],'New Hampshire':['Sununu','Pappas'],'Minnesota':['Tafoya','Flanagan'],'North Carolina':['Whatley','Cooper'],'Georgia':['Collins','Ossoff']};
 const PARTY={Collins:'R',Jackson:'D',Husted:'R',Brown:'D',Paxton:'R',Talarico:'D',Ricketts:'R',Osborn:'I',Sullivan:'R',Peltola:'D',Hinson:'R',Turek:'D',Marshall:'R',Hamilton:'D',Rogers:'R','El-Sayed':'D',Moody:'R',Nixon:'D','Graham Nordone':'R',Andrews:'D',Sununu:'R',Pappas:'D',Tafoya:'R',Flanagan:'D',Whatley:'R',Cooper:'D',Ossoff:'D'};
-function strip(s){return s.replace(/<script[\\s\\S]*?<\\/script>/gi,' ').replace(/<style[\\s\\S]*?<\\/style>/gi,' ').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\\s+/g,' ').trim()}
+function strip(s) {
+  return s
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 async function polls(){
  const u='https://www.realclearpolling.com/latest-polls/senate'; const html=await (await fetch(u,{headers:{'user-agent':'Mozilla/5.0'}})).text(); const t=strip(html); const out=[];
  for(const state of STATES){const names=RACES[state]; let best=null; for(const n1 of names){for(const n2 of names){if(n1===n2)continue; const marker=`2026 ${state} Senate`; let pos=t.indexOf(marker); while(pos>=0){const seg=t.slice(pos,pos+500); if(seg.includes(n1)&&seg.includes(n2)){const nums={}; for(const n of names){const m=seg.match(new RegExp(n.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')+'\\\\s+(\\\\d{1,2}(?:\\\\.\\\\d+)?)')); if(m)nums[n]=+m[1];} const pm=seg.match(/Poll\\s*([^R]{2,80}?)Results/i); const sm=seg.match(/Spread\\s*([^<]{1,50}?)(?=2026|$)/i); if(Object.keys(nums).length>=2){best={state,pollster:pm?pm[1].trim():'Latest poll',candidates:names.map(n=>({name:n,party:PARTY[n],pct:nums[n]??null})),spread:sm?sm[1].trim():'',source:u};break;} pos=t.indexOf(marker,pos+marker.length)} if(best)break} if(best)break} if(best)out.push(best); else out.push({state,error:'No matching latest poll found',source:u}); }
